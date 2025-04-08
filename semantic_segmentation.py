@@ -1,10 +1,13 @@
 from google.genai import types
+from google.genai.errors import ServerError, ClientError
 import cv2
 
 import os
+import time
 import json
 from pathlib import Path
 import argparse
+import re
 
 from utils import upload_file, client, model_name
 
@@ -24,16 +27,22 @@ def get_task_instruction(video_path):
     """The task instruction is assumed to be the name of the video file without the suffix _demo_{i}.mp4
     For example, we return "Move spoon." for "move_spoon_demo_1.mp4"
     """
-    base_name = video_path.stem 
-    task = base_name.split("_demo_")[0]
-    task = task.replace("_", " ")
-    task = task.capitalize()
-    return task + "."
+    instruction = video_path.stem 
+    pattern = r'_([a-z]+(?:_[a-z]+)*)_'
+
+    # Find all matches in the string
+    matches = re.findall(pattern, instruction)
+
+    # Join the matches and format the result
+    task = " ".join(matches).replace("_", " ").capitalize() + "."
+
+    if "demo" in task.lower():
+        task = task.split(" demo")[0] + "."
+
+    return task
 
 
-def extract_subtask_labels(video_path, task_instruction, output_dir):
-    # video_file = upload_video(video_path)
-
+def extract_subtask_labels(video_path, task_instruction):
     messages = []
     query_prompt = f"""You are a robot arm with a simple gripper. You are given the task "{task_instruction}" Given the task and the image showing the layout of the scene, create a plan of the possible sub-task motions you will need to perform to complete the task.
 
@@ -48,6 +57,7 @@ Here is a plan outlining the sub-task motions to move the spoon to the right:
 
     first_frame = get_first_frame(video_path)
     first_frame_part = upload_file(first_frame)
+    os.remove(first_frame)
     messages.append(types.Content(role="user", parts=[first_frame_part, types.Part(text=query_prompt)]))
 
     response = client.models.generate_content(
@@ -61,37 +71,73 @@ Here is a plan outlining the sub-task motions to move the spoon to the right:
 def main(args):
     print(f"VLM Processing {args.input_dir} dataset!")
 
-    # Create target directory
-    if os.path.isdir(args.output_dir):
-        user_input = input(
-            f"Target directory already exists at path: {args.output_dir}\nEnter 'y' to overwrite the directory, or anything else to exit: "
-        )
-        if user_input != "y":
-            exit()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Prepare JSON file to record VLM api responses
     labels_json_dict = {}
     labels_json_out_path = f"{args.output_dir}/dataset_subtask_labels.json"
-    with open(labels_json_out_path, "w") as f:
-        # Just test that we can write to this file (we overwrite it later)
-        json.dump(labels_json_dict, f)
 
-    # Process all mp4 files in the dataset directory
+    # Check if output file exists and load previous results
+    if os.path.exists(labels_json_out_path):
+        print(f"Found existing labels file at {labels_json_out_path}, continuing from previous state")
+        with open(labels_json_out_path, 'r') as f:
+            labels_json_dict = json.load(f)
+
+    metadata_path = Path(args.input_dir) / "metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+            
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+
+    # Process files listed in metadata
+    seen_instructions = set()
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
+        traj_filename = mp4_file.stem.split("_demo")[0]+"_demo"
+
+        # Skip if this file was already processed
+        if traj_filename in labels_json_dict:
+            print(f"Skipping already processed file: {mp4_file}")
+            continue
+
+        file_metadata = metadata.get(traj_filename)
+        if not mp4_file.exists():
+            print(f"Warning: Video file {mp4_file} not found, skipping")
+            continue
+
+        task_instruction = file_metadata["task"]
+        if task_instruction in seen_instructions:
+            print(f"Skipping duplicate task instruction: {task_instruction}")
+            continue
+        seen_instructions.add(task_instruction)
         print(f"Processing file: {mp4_file}")
         task_instruction = get_task_instruction(mp4_file)
-        response = extract_subtask_labels(mp4_file, task_instruction, args.output_dir)
+        time.sleep(5)  # Avoid rate limiting
+        try:
+            response = extract_subtask_labels(mp4_file, task_instruction)
+        except ServerError as e:
+            print(f"Error processing file {mp4_file}: {e}")
+            print("Retrying...")
+            time.sleep(10)
+            try:
+                response = extract_subtask_labels(mp4_file, task_instruction)
+            except Exception as e:
+                print(f"Error processing file {mp4_file} again: {e}")
+                continue
+        except ClientError as e:
+            print(f"Client error: {e}")
+            break
 
-        # Save the response to the JSON file
         subtask_labels = response.text.split(":", 1)[1].strip()
-        labels_json_dict[mp4_file.stem] = {"task_instruction": task_instruction, "subtask_labels": subtask_labels}
-        print(f"Saved response for {mp4_file.stem} to {labels_json_out_path}")
+        labels_json_dict[traj_filename] = {
+            "subtask_labels": subtask_labels,
+            "response": response.text,
+        }
         print(f"Semantic sub-task labels: {response.text}")
         print("---------------------------------------------------")
 
-    with open(labels_json_out_path, "w") as f:
-        json.dump(labels_json_dict, f, indent=4)
+        with open(labels_json_out_path, "w") as f:
+            json.dump(labels_json_dict, f, indent=4)
+
     print(f"Saved all results to {labels_json_out_path}")
 
 

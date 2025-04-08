@@ -10,6 +10,7 @@ if not GOOGLE_API_KEY:
     raise ValueError("Please set the GOOGLE_API_KEY environment variable.")
 client = genai.Client(api_key=GOOGLE_API_KEY)
 model_name = "gemini-2.5-pro-exp-03-25"
+# model_name = "gemini-2.0-flash"
 
 
 def upload_file(file_name):
@@ -24,9 +25,7 @@ def upload_file(file_name):
         raise ValueError(file.state)
     print(f"File processing complete: " + file.uri)
 
-    return (
-        types.Part.from_uri(
-            file_uri=file.uri,
-            mime_type=file.mime_type,
-        ),
+    return types.Part.from_uri(
+        file_uri=file.uri,
+        mime_type=file.mime_type,
     )
