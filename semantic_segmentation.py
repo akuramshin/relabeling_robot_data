@@ -7,9 +7,8 @@ import time
 import json
 from pathlib import Path
 import argparse
-import re
 
-from utils import upload_file, client, model_name
+from utils import upload_file, client, model_name, get_task_instruction
 
 
 example_files = [
@@ -54,7 +53,7 @@ example_model_message = [
 
 
 def get_first_frame(video_path):
-    vidcap = cv2.VideoCapture(video_path)
+    vidcap = cv2.VideoCapture(str(video_path))
     success, image = vidcap.read()
     if success:
         name = str(video_path.with_name(f"{video_path.stem}_first_frame.png"))
@@ -62,25 +61,6 @@ def get_first_frame(video_path):
         return name
     else:
         raise ValueError(f"Failed to read video file {video_path}.")
-
-
-def get_task_instruction(video_path):
-    """The task instruction is assumed to be the name of the video file without the suffix _demo_{i}.mp4
-    For example, we return "Move spoon." for "move_spoon_demo_1.mp4"
-    """
-    instruction = video_path.stem
-    pattern = r"_([a-z]+(?:_[a-z]+)*)_"
-
-    # Find all matches in the string
-    matches = re.findall(pattern, instruction)
-
-    # Join the matches and format the result
-    task = " ".join(matches).replace("_", " ").capitalize() + "."
-
-    if "demo" in task.lower():
-        task = task.split(" demo")[0] + "."
-
-    return task
 
 
 def create_prompt(task_instruction, frame, zero_shot=False):
@@ -136,35 +116,35 @@ def main(args):
         with open(labels_json_out_path, "r") as f:
             labels_json_dict = json.load(f)
 
-    metadata_path = Path(args.input_dir) / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+    # metadata_path = Path(args.input_dir) / "metadata.json"
+    # if not metadata_path.exists():
+    #     raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
 
-    with open(metadata_path) as f:
-        metadata = json.load(f)
+    # with open(metadata_path) as f:
+    #     metadata = json.load(f)
 
-    # Process files listed in metadata
     seen_instructions = set()
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
         traj_filename = mp4_file.stem.split("_demo")[0] + "_demo"
 
-        file_metadata = metadata.get(traj_filename)
         if not mp4_file.exists():
             print(f"Warning: Video file {mp4_file} not found, skipping")
             continue
 
-        task_instruction = file_metadata["task"]
-        if task_instruction in seen_instructions:
-            print(f"Skipping duplicate task instruction: {task_instruction}")
+        # file_metadata = metadata.get(traj_filename)
+        # task_instruction = file_metadata["task"]
+        scene, task_instruction, _ = get_task_instruction(mp4_file)
+        grounded_instruction = scene + "_" + task_instruction
+        if grounded_instruction in seen_instructions:
+            print(f"Skipping duplicate task instruction: {task_instruction} in scene {scene}")
             continue
-        seen_instructions.add(task_instruction)
+        seen_instructions.add(grounded_instruction)
 
         if traj_filename in labels_json_dict:
             print(f"Skipping already processed file: {mp4_file}")
             continue
 
         print(f"Processing file: {mp4_file}")
-        task_instruction = get_task_instruction(mp4_file)
         time.sleep(5)  # Avoid rate limiting
         first_frame = get_first_frame(mp4_file)
         first_frame_part = upload_file(first_frame)

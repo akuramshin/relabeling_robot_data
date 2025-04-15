@@ -3,6 +3,7 @@ from google.genai import types
 
 import os
 import time
+import re
 
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -29,3 +30,23 @@ def upload_file(file_name):
         file_uri=file.uri,
         mime_type=file.mime_type,
     )
+
+def get_task_instruction(video_path):
+    """The task instruction is assumed to be the name of the video file without the suffix _demo_{i}.mp4
+    For example, we return "Move spoon." for "move_spoon_demo_1.mp4"
+    """
+    instruction = video_path.stem
+    pattern = r"([A-Z]+(?:_[A-Z,0-9]+)*)_([a-z]+(?:_[a-z]+)*)_demo_(\d+)"
+
+    match = re.search(pattern, instruction)
+
+    if match:
+        scene = match.group(1)
+        task = match.group(2).replace("_", " ").capitalize() + "."
+        demo_number = int(match.group(3))
+    else:
+        scene = None
+        task = None
+        demo_number = -1
+
+    return scene, task, demo_number
