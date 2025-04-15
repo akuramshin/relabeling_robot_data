@@ -17,7 +17,7 @@ def upload_file(file_name):
     file = client.files.upload(file=file_name)
 
     while file.state == "PROCESSING":
-        print("Waiting for file to be uploaded.")
+        print(f"Waiting for {file_name} to be uploaded.")
         time.sleep(10)
         file = client.files.get(name=file.name)
 

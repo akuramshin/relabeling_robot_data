@@ -109,13 +109,10 @@ def create_prompt(task_instruction, frame, zero_shot=False):
     return contents
 
 
-def extract_subtask_labels(video_path, task_instruction):
+def extract_subtask_labels(frame_part, task_instruction):
     messages = []
 
-    first_frame = get_first_frame(video_path)
-    first_frame_part = upload_file(first_frame)
-    os.remove(first_frame)
-    messages = create_prompt(task_instruction, first_frame_part)
+    messages = create_prompt(task_instruction, frame_part)
 
     response = client.models.generate_content(
         model=model_name,
@@ -169,14 +166,17 @@ def main(args):
         print(f"Processing file: {mp4_file}")
         task_instruction = get_task_instruction(mp4_file)
         time.sleep(5)  # Avoid rate limiting
+        first_frame = get_first_frame(mp4_file)
+        first_frame_part = upload_file(first_frame)
+        os.remove(first_frame)
         try:
-            response = extract_subtask_labels(mp4_file, task_instruction)
+            response = extract_subtask_labels(first_frame_part, task_instruction)
         except ServerError as e:
             print(f"Error processing file {mp4_file}: {e}")
             print("Retrying...")
             time.sleep(10)
             try:
-                response = extract_subtask_labels(mp4_file, task_instruction)
+                response = extract_subtask_labels(first_frame_part, task_instruction)
             except Exception as e:
                 print(f"Error processing file {mp4_file} again: {e}")
                 continue
