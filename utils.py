@@ -42,7 +42,7 @@ def get_task_instruction(video_path):
 
     if match:
         scene = match.group(1)
-        task = match.group(2).replace("_", " ").capitalize() + "."
+        task = match.group(2).rsplit('_', 1)[0].replace("_", " ").capitalize() + "."
         demo_number = int(match.group(3))
     else:
         scene = None

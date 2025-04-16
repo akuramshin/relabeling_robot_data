@@ -1,15 +1,13 @@
 from google.genai import types
 from google.genai.errors import ServerError, ClientError
-import cv2
 
 import os
 import time
 import json
 from pathlib import Path
 import argparse
-import re
 
-from utils import upload_file, client, model_name
+from utils import upload_file, client, model_name, get_task_instruction
 
 
 example_files = [
@@ -69,27 +67,8 @@ example_model_message = [
 ]
 
 
-def get_task_instruction(video_path):
-    """The task instruction is assumed to be the name of the video file without the suffix _demo_{i}.mp4
-    For example, we return "Move spoon." for "move_spoon_demo_1.mp4"
-    """
-    instruction = video_path.stem
-    pattern = r"_([a-z]+(?:_[a-z]+)*)_"
-
-    # Find all matches in the string
-    matches = re.findall(pattern, instruction)
-
-    # Join the matches and format the result
-    task = " ".join(matches).replace("_", " ").capitalize() + "."
-
-    if "demo" in task.lower():
-        task = task.split(" demo")[0] + "."
-
-    return task
-
-
 def create_prompt(task_instruction, video, subtask_labels, zero_shot=False):
-    query_prompt = f"""The video is showing a robot arm performing the task \"Put the white mug on the left plate.\" The task can be broken down into these possible sub-task motions:
+    query_prompt = f"""The video is showing a robot arm performing the task \"{task_instruction}\" The task can be broken down into these possible sub-task motions:
 
 {subtask_labels}
 
@@ -107,6 +86,7 @@ Carefully look at the video and describe the sub-task motions you see being perf
         types.Content(role="model", parts=[example_model_message[2]]),
         types.Content(role="user", parts=[video, types.Part.from_text(text=query_prompt)]),
     ]
+    print(query_prompt)
     return contents
 
 
@@ -137,64 +117,53 @@ def main(args):
         with open(labels_json_out_path, "r") as f:
             labels_json_dict = json.load(f)
 
-    metadata_path = Path(args.input_dir) / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
-
-    with open(metadata_path) as f:
-        metadata = json.load(f)
-
     # Load previous labels if available
-    previous_labels = None
     if os.path.exists(args.subtask_labels):
         with open(args.subtask_labels, "r") as f:
             subtask_labels_dict = json.load(f)
 
-    # Process files listed in metadata
-    seen_instructions = set()
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
-        traj_filename = mp4_file.stem.split("_demo")[0] + "_demo"
-
-        file_metadata = metadata.get(traj_filename)
         if not mp4_file.exists():
             print(f"Warning: Video file {mp4_file} not found, skipping")
             continue
 
-        task_instruction = file_metadata["task"]
-        if task_instruction in seen_instructions:
-            print(f"Skipping duplicate task instruction: {task_instruction}")
+        scene_task_id = mp4_file.stem.split("_demo")[0] + "_demo"
+        _, task_instruction, demo_id = get_task_instruction(mp4_file)
+        if demo_id == -1:
+            print(f"Warning: No demo ID found for {mp4_file.name}, skipping")
             continue
-        seen_instructions.add(task_instruction)
+        traj_id = scene_task_id + f"_{demo_id}"
 
-        if traj_filename in labels_json_dict:
-            print(f"Skipping already processed file: {mp4_file}")
+        if traj_id in labels_json_dict:
+            print(f"Skipping already processed file: {mp4_file.name}")
             continue
 
-        print(f"Processing file: {mp4_file}")
-        task_instruction = get_task_instruction(mp4_file)
-        time.sleep(5)  # Avoid rate limiting
-        if traj_filename not in subtask_labels_dict:
-            print(f"Warning: No subtask labels found for {traj_filename}, skipping")
+        print(f"Processing file: {mp4_file.name}")
+        if scene_task_id not in subtask_labels_dict:
+            print(f"Warning: No subtask labels found for {scene_task_id}, skipping")
             continue
-        subtask_labels = subtask_labels_dict.get(traj_filename).get("subtask_labels")
+        subtask_labels = subtask_labels_dict.get(scene_task_id).get("subtask_labels")
         video_part = upload_file(mp4_file)
+        time.sleep(5)  # Avoid rate limiting
         try:
             response = extract_subtask_labels(video_part, task_instruction, subtask_labels)
         except ServerError as e:
-            print(f"Error processing file {mp4_file}: {e}")
+            print(f"Error processing file {mp4_file.name}: {e}")
             print("Retrying...")
             time.sleep(10)
             try:
                 response = extract_subtask_labels(video_part, task_instruction, subtask_labels)
             except Exception as e:
-                print(f"Error processing file {mp4_file} again: {e}")
+                print(f"Error processing file {mp4_file.name} again: {e}")
                 continue
         except ClientError as e:
             print(f"Client error: {e}")
             break
 
-        subtask_labels = response.text.split(":", 1)[1].strip()
-        labels_json_dict[traj_filename] = {
+        response_lines = response.text.split(":", 1)[1].strip().split("\n")
+        subtask_labels = [line for line in response_lines if line.strip() and line.strip()[0].isdigit()]
+        labels_json_dict[traj_id] = {
+            "demo_id": demo_id,
             "motion_labels": subtask_labels,
             "response": response.text,
         }

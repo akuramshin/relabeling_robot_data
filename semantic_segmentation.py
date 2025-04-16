@@ -116,12 +116,13 @@ def main(args):
         with open(labels_json_out_path, "r") as f:
             labels_json_dict = json.load(f)
 
-    # metadata_path = Path(args.input_dir) / "metadata.json"
-    # if not metadata_path.exists():
-    #     raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
-
-    # with open(metadata_path) as f:
-    #     metadata = json.load(f)
+    metadata_path = Path(args.input_dir) / "metadata.json"
+    if not metadata_path.exists():
+        print(f"Metadata file not found at {metadata_path}")
+        metadata = None
+    else:
+        with open(metadata_path) as f:
+            metadata = json.load(f)
 
     seen_instructions = set()
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
@@ -131,9 +132,12 @@ def main(args):
             print(f"Warning: Video file {mp4_file} not found, skipping")
             continue
 
-        # file_metadata = metadata.get(traj_filename)
-        # task_instruction = file_metadata["task"]
-        scene, task_instruction, _ = get_task_instruction(mp4_file)
+        if metadata:
+            file_metadata = metadata.get(mp4_file.name)
+            scene = file_metadata["scene"]
+            task_instruction = file_metadata["task"]
+        else:
+            scene, task_instruction, _ = get_task_instruction(mp4_file)
         grounded_instruction = scene + "_" + task_instruction
         if grounded_instruction in seen_instructions:
             print(f"Skipping duplicate task instruction: {task_instruction} in scene {scene}")
@@ -141,10 +145,10 @@ def main(args):
         seen_instructions.add(grounded_instruction)
 
         if traj_filename in labels_json_dict:
-            print(f"Skipping already processed file: {mp4_file}")
+            print(f"Skipping already processed file: {mp4_file.name}")
             continue
 
-        print(f"Processing file: {mp4_file}")
+        print(f"Processing file: {mp4_file.name}")
         time.sleep(5)  # Avoid rate limiting
         first_frame = get_first_frame(mp4_file)
         first_frame_part = upload_file(first_frame)
@@ -152,13 +156,13 @@ def main(args):
         try:
             response = extract_subtask_labels(first_frame_part, task_instruction)
         except ServerError as e:
-            print(f"Error processing file {mp4_file}: {e}")
+            print(f"Error processing file {mp4_file.name}: {e}")
             print("Retrying...")
             time.sleep(10)
             try:
                 response = extract_subtask_labels(first_frame_part, task_instruction)
             except Exception as e:
-                print(f"Error processing file {mp4_file} again: {e}")
+                print(f"Error processing file {mp4_file.name} again: {e}")
                 continue
         except ClientError as e:
             print(f"Client error: {e}")
