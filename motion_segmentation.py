@@ -86,7 +86,6 @@ Carefully look at the video and describe the sub-task motions you see being perf
         types.Content(role="model", parts=[example_model_message[2]]),
         types.Content(role="user", parts=[video, types.Part.from_text(text=query_prompt)]),
     ]
-    print(query_prompt)
     return contents
 
 
@@ -116,6 +115,14 @@ def main(args):
         print(f"Found existing labels file at {labels_json_out_path}, continuing from previous state")
         with open(labels_json_out_path, "r") as f:
             labels_json_dict = json.load(f)
+    
+    metadata_path = Path(args.input_dir) / "metadata.json"
+    if not metadata_path.exists():
+        print(f"Metadata file not found at {metadata_path}")
+        metadata = None
+    else:
+        with open(metadata_path) as f:
+            metadata = json.load(f)
 
     # Load previous labels if available
     if os.path.exists(args.subtask_labels):
@@ -128,7 +135,12 @@ def main(args):
             continue
 
         scene_task_id = mp4_file.stem.split("_demo")[0] + "_demo"
-        _, task_instruction, demo_id = get_task_instruction(mp4_file)
+        if metadata:
+            file_metadata = metadata.get(mp4_file.name)
+            task_instruction = file_metadata["task"]
+            demo_id = file_metadata["demo_id"]
+        else:
+            _, task_instruction, demo_id = get_task_instruction(mp4_file)
         if demo_id == -1:
             print(f"Warning: No demo ID found for {mp4_file.name}, skipping")
             continue
@@ -167,7 +179,7 @@ def main(args):
             "motion_labels": subtask_labels,
             "response": response.text,
         }
-        print(f"Semantic sub-task labels: {response.text}")
+        print(f"Motion sub-task timecodes: {response.text}")
         print("---------------------------------------------------")
 
         with open(labels_json_out_path, "w") as f:
@@ -177,7 +189,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extract videos from HDF5 dataset files.")
+    parser = argparse.ArgumentParser(description="Extract motion subtasks from video files.")
     parser.add_argument("--input_dir", type=Path, help="Path to the input dir of video files", required=True)
     parser.add_argument("--subtask_labels", type=Path, help="Path to the subtask labels json file", required=True)
     parser.add_argument("--output_dir", type=Path, help="Directory to save output labels", required=True)

@@ -3,6 +3,7 @@ import h5py
 import os
 import glob
 import re
+import argparse
 
 
 def prep_dataset(hdf5_file, attrs):
@@ -19,6 +20,9 @@ def parse_file(input_file, demo_entries, output_file, subtask_idx):
         motion_labels = annotations["motion_labels"]
         demo_id = annotations["demo_id"]
 
+        if subtask_idx >= len(motion_labels):
+            print(f"  Sub-task index {subtask_idx} out of range for demo {demo}.")
+            continue
         sub_task = motion_labels[subtask_idx]
         sub_task = sub_task.replace("*", "")
 
@@ -125,9 +129,31 @@ def process_dataset(motion_segmantations, semantic_segmentations, hdf5_dir, outp
                     parse_file(original_file, demo_entries, subtask_out_file, i)
 
 
-# Example usage:
-motion_responses = "/home/artur/Downloads/test_out/dataset_motion_labels.json"  # Replace with the actual path
-semantic_responses = "/home/artur/Downloads/test_out/dataset_subtask_labels.json"
-hdf5_dir = "/home/artur/libero_90"  # Replace with the actual path
-output_dir = "/home/artur/Downloads/test_out"  # Replace with the actual path
-process_dataset(motion_responses, semantic_responses, hdf5_dir, output_dir)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Write subtask trajectories to LIBERO dataset files.")
+    parser.add_argument(
+        "--motion-segmentations",
+        type=str,
+        required=True,
+        help="Path to the motion segmentations JSON file.",
+    )
+    parser.add_argument(
+        "--semantic-segmentations",
+        type=str,
+        required=True,
+        help="Path to the semantic segmentations JSON file.",
+    )
+    parser.add_argument(
+        "--hdf5-dir",
+        type=str,
+        required=True,
+        help="Path to the directory containing HDF5 files.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        required=True,
+        help="Path to the output directory for processed HDF5 files.",
+    )
+    args = parser.parse_args()
+    process_dataset(args.motion_segmentations, args.semantic_segmentations, args.hdf5_dir, args.output_dir)

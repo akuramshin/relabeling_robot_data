@@ -183,7 +183,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extract videos from HDF5 dataset files.")
+    parser = argparse.ArgumentParser(description="Extract semantic subtasks from video files.")
     parser.add_argument("--input_dir", type=Path, help="Path to the input dir of video files", required=True)
     parser.add_argument("--output_dir", type=Path, help="Directory to save output labels", required=True)
     args = parser.parse_args()
