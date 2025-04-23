@@ -3,18 +3,23 @@ from google.genai.errors import ServerError, ClientError
 import cv2
 
 import os
+import re
 import time
 import json
 from pathlib import Path
 import argparse
 
-from utils import upload_file, client, model_name, get_task_instruction
+from utils import part_from_file, get_task_instruction, init_genai_client, SemanticBreakdownGenerator
 
+
+model_name = "gemini-2.5-pro-exp-03-25"
+# model_name = "gemini-2.0-flash"
+client = init_genai_client()
 
 example_files = [
-    upload_file(file_name="./examples/close_cabinet.png"),
-    upload_file(file_name="./examples/open_cabinet.png"),
-    upload_file(file_name="./examples/open_cabinet_and_place_bowl.png"),
+    # part_from_file(client, file_name="./examples/close_cabinet.png"),
+    # part_from_file(client, file_name="./examples/open_cabinet.png"),
+    # part_from_file(client, file_name="./examples/open_cabinet_and_place_bowl.png"),
 ]
 example_user_message = [
     types.Part.from_text(
@@ -64,19 +69,27 @@ def get_first_frame(video_path):
 
 
 def create_prompt(task_instruction, frame, zero_shot=False):
-    base_prompt = f"""You are a robot arm with a simple gripper. You are given the task "{task_instruction}" Given the task and the image showing the layout of the scene, create a plan of the possible sub-task motions you will need to perform to complete the task."""
+    base_prompt = f"""You are a robot arm with a simple gripper. You are given the task "{task_instruction}" Using the task and the image showing the layout of the scene, create a plan of the possible sub-task motions you will need to perform to complete the task."""
 
     if zero_shot:
-        query_prompt = base_prompt + """\n\nHere is a plan outlining the sub-task motions to move the spoon to the right:
-        
-1. Grasp Spoon: Approach the spoon and use the gripper to grasp the spoon by the handle.
-2. Lift Spoon: Move the gripper vertically upwards a small distance, just enough to lift the spoon clear of the table surface.
-3. Move Right: Move the gripper horizontally to the right, carrying the spoon over the table surface to the desired new position.
-4. Release Spoon: Move the gripper vertically downwards to place the spoon gently onto the table surface at the new location and open the gripper to release the spoon."""
+        query_prompt = (
+            base_prompt
+            + f"""\n\nFollow these guidelines:
+1. Start off by pointing to no more than 8 items in the image."""
+            + """ The answer should follow the json format: [{"point": <point>, "label": <label1>}, ...]."""
+            + f""" The points are in [y, x] format normalized to 0-1000. One element a line.
+2. Think step by step and list the locations and relations of all objects, noting any object that might interfere with the task.
+3. Finally, output the sub-tasks that will need to be completed to "{task_instruction}" in this scene. Try to be concise."""
+            + """ Output in the json format:  [{"sub_task": <sub-task>, "description": <description>}, ...]
+
+Example sub-tasks: "Grasp the bowl to the right of the white mug", "Move the mug towards the red plate", "Rotate the knob", "Pull the top drawer open", "Push the bottom drawer closed", "Place the can on top of the cabinet", "Lift the middle bowl"
+        """
+        )
+
         return [types.Content(role="user", parts=[frame, types.Part(text=query_prompt)])]
-    
+
     query_prompt = base_prompt + "\n\nLook at the previous examples for the preferred format."
-    
+
     contents = [
         types.Content(role="user", parts=[example_files[0], example_user_message[0]]),
         types.Content(role="model", parts=[example_model_message[0]]),
@@ -92,11 +105,12 @@ def create_prompt(task_instruction, frame, zero_shot=False):
 def extract_subtask_labels(frame_part, task_instruction):
     messages = []
 
-    messages = create_prompt(task_instruction, frame_part)
+    messages = create_prompt(task_instruction, frame_part, zero_shot=True)
 
     response = client.models.generate_content(
         model=model_name,
         contents=messages,
+        config=types.GenerateContentConfig(temperature=0.0),
     )
 
     return response
@@ -125,6 +139,7 @@ def main(args):
             metadata = json.load(f)
 
     seen_instructions = set()
+    video_tasks = []
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
         traj_filename = mp4_file.stem.split("_demo")[0] + "_demo"
 
@@ -148,36 +163,85 @@ def main(args):
             print(f"Skipping already processed file: {mp4_file.name}")
             continue
 
-        print(f"Processing file: {mp4_file.name}")
-        time.sleep(5)  # Avoid rate limiting
-        first_frame = get_first_frame(mp4_file)
-        first_frame_part = upload_file(first_frame)
-        os.remove(first_frame)
-        try:
-            response = extract_subtask_labels(first_frame_part, task_instruction)
-        except ServerError as e:
-            print(f"Error processing file {mp4_file.name}: {e}")
-            print("Retrying...")
-            time.sleep(10)
-            try:
-                response = extract_subtask_labels(first_frame_part, task_instruction)
-            except Exception as e:
-                print(f"Error processing file {mp4_file.name} again: {e}")
-                continue
-        except ClientError as e:
-            print(f"Client error: {e}")
-            break
+        video_tasks.append((mp4_file, traj_filename, scene, task_instruction))
 
-        subtask_labels = response.text.split(":", 1)[1].strip()
-        labels_json_dict[traj_filename] = {
-            "subtask_labels": subtask_labels,
-            "response": response.text,
-        }
-        print(f"Semantic sub-task labels: {response.text}")
-        print("---------------------------------------------------")
+    if args.batched_inference:
+        print("Running in batched inference mode.")
+        # Prepare batch inputs
+        batch_inputs = []
+        t = 0
+        for mp4_file, traj_filename, scene, task_instruction in video_tasks:
+            if t >= 2:
+                break
+            first_frame = get_first_frame(mp4_file)
+            first_frame_part = part_from_file(client, first_frame)
+            os.remove(first_frame)
+            batch_inputs.append(
+                {
+                    "scenario_name": traj_filename,
+                    "task_instruction": task_instruction,
+                    "image_url": first_frame_part.uri,
+                }
+            )
+            t += 1
 
+        subtask_dataset = SemanticBreakdownGenerator(
+            model_name=model_name,
+            backend="gemini",
+            batch=True,
+            backend_params={"batch_size": 2},
+        )
+        # Run batched inference
+        results = subtask_dataset(batch_inputs)
+        # Save results
+        for result in results:
+            for traj_filename, data in result.items():
+                labels_json_dict[traj_filename] = data
+                print(f"Semantic sub-task labels for {traj_filename}: {data['subtask_labels']}")
+                print("---------------------------------------------------")
         with open(labels_json_out_path, "w") as f:
             json.dump(labels_json_dict, f, indent=4)
+    else:
+        zero_shot = True
+        for mp4_file, traj_filename, scene, task_instruction in video_tasks:
+            print(f"Processing file: {mp4_file.name}")
+            time.sleep(5)  # Avoid rate limiting
+            first_frame = get_first_frame(mp4_file)
+            first_frame_part = part_from_file(client, first_frame)
+            os.remove(first_frame)
+            try:
+                response = extract_subtask_labels(first_frame_part, task_instruction)
+            except ServerError as e:
+                print(f"Error processing file {mp4_file.name}: {e}")
+                print("Retrying...")
+                time.sleep(10)
+                try:
+                    response = extract_subtask_labels(first_frame_part, task_instruction)
+                except Exception as e:
+                    print(f"Error processing file {mp4_file.name} again: {e}")
+                    continue
+            except ClientError as e:
+                print(f"Client error: {e}")
+                break
+
+            if zero_shot:
+                json_blocks = re.findall(r"```json\s*(.*?)\s*```", response.text, re.DOTALL)
+                subtask_list = json.loads(json_blocks[1])
+                subtask_labels = ""
+                for i, subtask in enumerate(subtask_list):
+                    subtask_labels += f"{i+1}. **{subtask['sub_task']}:** {subtask['description']}\n"
+            else:
+                subtask_labels = response.text.split(":", 1)[1].strip()
+
+            labels_json_dict[traj_filename] = {
+                "subtask_labels": subtask_labels,
+                "response": response.text,
+            }
+            print(f"Semantic sub-task labels: {response.text}")
+            print("---------------------------------------------------")
+
+            with open(labels_json_out_path, "w") as f:
+                json.dump(labels_json_dict, f, indent=4)
 
     print(f"Saved all results to {labels_json_out_path}")
 
@@ -186,6 +250,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract semantic subtasks from video files.")
     parser.add_argument("--input_dir", type=Path, help="Path to the input dir of video files", required=True)
     parser.add_argument("--output_dir", type=Path, help="Directory to save output labels", required=True)
+    parser.add_argument("--batched_inference", action="store_true", help="Use batched inference for multiple videos")
     args = parser.parse_args()
 
     main(args)

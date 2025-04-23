@@ -4,44 +4,61 @@ import os
 import glob
 import re
 import argparse
+import cv2
+import numpy as np
 
 
-def prep_dataset(hdf5_file, attrs):
-    grp = hdf5_file.create_group("data")
-    grp.attrs.update(attrs)
+def resize_image(img, resize_size):
+    assert isinstance(resize_size, tuple)
+    
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 100]
+    _, encoded = cv2.imencode('.jpg', img, encode_param)
+    img = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    img_resized = cv2.resize(img, resize_size, interpolation=cv2.INTER_LANCZOS4)
+    img_resized = np.clip(np.round(img_resized), 0, 255).astype(np.uint8)
+    return img_resized
 
 
-def parse_file(input_file, demo_entries, output_file, subtask_idx):
+def parse_file(input_file, demo_entries, output_file, sub_task, fps=10):
     grp = output_file.create_group("data")
     grp.attrs.update(input_file["data"].attrs)
 
     total_len = 0
     for i, (demo, annotations) in enumerate(demo_entries):
-        motion_labels = annotations["motion_labels"]
+        # motion_labels = annotations["motion_labels"]
+        motion_labels = {s['sub_task'].lower() : s['time_range'] for s in annotations["motion_labels"]}
         demo_id = annotations["demo_id"]
 
-        if subtask_idx >= len(motion_labels):
-            print(f"  Sub-task index {subtask_idx} out of range for demo {demo}.")
+        # if subtask_id >= len(motion_labels):
+        #     print(f"  Sub-task index {subtask_id} out of range for demo {demo}.")
+        #     continue
+        if sub_task not in motion_labels:
+            # print(f"  Sub-task \"{sub_task}"not found in demo {demo}.")
             continue
-        sub_task = motion_labels[subtask_idx]
-        sub_task = sub_task.replace("*", "")
+        # sub_task = sub_task.replace("*", "")
 
+        time_range = motion_labels[sub_task]
         timecode_pattern = r"(\d\d:\d\d)"
-        timecode_matches = re.findall(timecode_pattern, sub_task)
-        if timecode_matches and len(timecode_matches) < 2:
-            raise ValueError(f"Invalid timecodes found in sub-task: {sub_task}")
-        start_time, end_time = timecode_matches
+        timecode_matches = re.findall(timecode_pattern, time_range)
+        if not timecode_matches or (timecode_matches and len(timecode_matches) < 2):
+            print(f"Invalid timecodes found in demo: {demo} sub-task: {sub_task}")
+            continue
+        start_time, end_time = timecode_matches[:2]
         start_minutes, start_seconds = map(int, start_time.split(":"))
         end_minutes, end_seconds = map(int, end_time.split(":"))
 
-        instruction_pattern = r"(\s[A-Za-z,;\'\"\/:\s]+(?:[a-z]+).)"
-        instruction_matches = re.findall(instruction_pattern, sub_task)
-        if not instruction_matches:
-            raise ValueError(f"Invalid instruction found in sub-task: {sub_task}")
-        instruction = instruction_matches[0].strip()
+        # instruction_pattern = r"(\s[A-Za-z,;\'\"\/():\s]+(?:[a-z]+).)"
+        # instruction_matches = re.findall(instruction_pattern, sub_task)
+        # if not instruction_matches:
+        #     raise ValueError(f"Invalid instruction found in sub-task: {sub_task}")
+        # # instruction = instruction_matches[0].strip() # In the case we want to use the entire line as the instruction
+        # instruction = instruction_matches[0].strip().split(":")[0]
+        # instruction = instruction.lower().capitalize() + "."
+        task = sub_task.replace("right", "#TEMP#").replace("left", "right").replace("#TEMP#", "left")
+        instruction = task.lower().capitalize() + "."
 
-        start_frame = (start_minutes * 60 + start_seconds) * 10  # Assuming 10 FPS
-        end_frame = (end_minutes * 60 + end_seconds) * 10
+        start_frame = (start_minutes * 60 + start_seconds) * fps
+        end_frame = (end_minutes * 60 + end_seconds) * fps
 
         actions = input_file["data"][f"demo_{demo_id}"]["actions"][start_frame:end_frame]
         rewards = input_file["data"][f"demo_{demo_id}"]["rewards"][start_frame:end_frame]
@@ -65,13 +82,14 @@ def parse_file(input_file, demo_entries, output_file, subtask_idx):
         ep_data_grp.create_dataset("states", data=states)
         ep_data_grp.create_dataset("dones", data=dones),
         ep_data_grp.create_dataset("robot_states", data=robot_states)
-
         obs_grp = ep_data_grp.create_group("obs")
         obs_grp.create_dataset("gripper_states", data=gripper_states)
         obs_grp.create_dataset("joint_states", data=joint_states)
         obs_grp.create_dataset("ee_states", data=ee_states)
         obs_grp.create_dataset("ee_pos", data=ee_states[:, :3])
         obs_grp.create_dataset("ee_ori", data=ee_states[:, 3:])
+        agentview_rgb = np.stack([resize_image(img, (256, 256)) for img in agentview_rgb])
+        eye_in_hand_rgb = np.stack([resize_image(img, (256, 256)) for img in eye_in_hand_rgb])
         obs_grp.create_dataset("agentview_rgb", data=agentview_rgb)
         obs_grp.create_dataset("eye_in_hand_rgb", data=eye_in_hand_rgb)
 
@@ -79,18 +97,25 @@ def parse_file(input_file, demo_entries, output_file, subtask_idx):
         ep_data_grp.attrs["init_state"] = states[0]
         total_len += ep_data_grp.attrs["num_samples"]
 
-        print(f"  Sub-task {subtask_idx} for {demo} processed with {ep_data_grp.attrs['num_samples']} frames.")
+        print(f"  Sub-task {sub_task} for {demo} processed with {ep_data_grp.attrs['num_samples']} frames.")
 
     grp.attrs["num_demos"] = len(demo_entries)
     grp.attrs["total"] = total_len
 
 
-def process_dataset(motion_segmantations, semantic_segmentations, hdf5_dir, output_dir):
+def process_dataset(args):
     """
     Processes the dataset by iterating through the HDF5 files,
     finding corresponding entries in the JSON file,
     extracting motion labels and data.
     """
+
+    motion_segmantations, semantic_segmentations, hdf5_dir, output_dir = (
+        args.motion_segmentations,
+        args.semantic_segmentations,
+        args.hdf5_dir,
+        args.output_dir,
+    )
 
     with open(semantic_segmentations, "r") as f:
         subtask_data = json.load(f)
@@ -113,6 +138,13 @@ def process_dataset(motion_segmantations, semantic_segmentations, hdf5_dir, outp
             print(f"  No corresponding motion segmentation entries found for {base_filename}")
             continue
 
+        # get the set of unique subtask labels
+        subtask_labels = []
+        for demo in demo_entries:
+            subtask_labels.extend([s['sub_task'].lower() for s in demo[1]["motion_labels"]])
+        subtask_labels = set(subtask_labels)
+        print(f"  Found {len(subtask_labels)} unique subtask labels for {base_filename}.")
+
         # In the case we want to use the semantic segmentation labels as instructions
         # subtask_list = subtask_data[base_filename]["subtask_labels"].replace("*","").split('\n')
         # subtask_labels = list(map(lambda x: "_".join(x.split(" ")[1:]).strip("_").lower()[:-1], subtask_list))
@@ -120,13 +152,13 @@ def process_dataset(motion_segmantations, semantic_segmentations, hdf5_dir, outp
         # for i, label in enumerate(subtask_labels):
         #     new_hdf5_filename = os.path.join(hdf5_dir, f"{label}.hdf5")
 
-        subtask_list = subtask_data[base_filename]["subtask_labels"].replace("*", "").split("\n")
+        # subtask_list = subtask_data[base_filename]["subtask_labels"].replace("*", "").split("\n")
         with h5py.File(hdf5_file, "r") as original_file:
-            for i in range(len(subtask_list)):
+            for i, subtask in enumerate(subtask_labels):
                 hdf5_path = os.path.join(output_dir, f"{base_filename}_subtask_{i}.hdf5")
 
                 with h5py.File(hdf5_path, "w") as subtask_out_file:
-                    parse_file(original_file, demo_entries, subtask_out_file, i)
+                    parse_file(original_file, demo_entries, subtask_out_file, subtask, args.fps)
 
 
 if __name__ == "__main__":
@@ -155,5 +187,6 @@ if __name__ == "__main__":
         required=True,
         help="Path to the output directory for processed HDF5 files.",
     )
+    parser.add_argument("--fps", type=int, default=10, help="Frames per second of the processed videos.")
     args = parser.parse_args()
-    process_dataset(args.motion_segmentations, args.semantic_segmentations, args.hdf5_dir, args.output_dir)
+    process_dataset(args)
