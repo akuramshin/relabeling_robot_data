@@ -1,6 +1,5 @@
-absl-py
-jax
-numpy
-opencv-python
+hydra-core
 libero
 octo
+matplotlib
+tqdm

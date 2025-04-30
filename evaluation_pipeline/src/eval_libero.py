@@ -5,7 +5,6 @@ import jax
 import numpy as np
 from absl import logging
 import matplotlib.pyplot as plt
-from collections import defaultdict
 from octo.model.octo_model import OctoModel
 from octo.utils.train_callbacks import supply_rng
 from libero.libero import benchmark, get_libero_path

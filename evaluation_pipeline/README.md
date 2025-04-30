@@ -5,7 +5,9 @@ This project provides an evaluation pipeline for assessing the performance of di
 ## Project Structure
 
 - **configs/**: Contains configuration files for the evaluation pipeline.
-  - **test_cases.json**: Defines the test cases to be evaluated, including `task_id` and `instruction`.
+  - **test_cases_1.json**: Defines the test cases to be evaluated, including `task_id` and `instruction`.
+  - **test_cases_2.json**: Defines the test cases to be evaluated, including `task_id` and `instruction`.
+  ...
 
 - **src/**: Contains the source code for the evaluation pipeline.
   - **eval_libero.py**: The main script that executes the evaluation process, loading test cases and comparing checkpoint performances.
@@ -13,28 +15,29 @@ This project provides an evaluation pipeline for assessing the performance of di
   - **__init__.py**: Marks the directory as a Python package.
 
 - **results/**: Stores the evaluation results for each test case.
-  - **task_name_1.json**: Results for the first test case.
-  - **task_name_2.json**: Results for the second test case.
+  - **task_name_1_{checkpoint}.json**: Results for the first test case.
+  - **task_name_2_checkpoint}.json**: Results for the second test case.
+  ...
 
 - **README.md**: Documentation for the project, including setup and usage instructions.
 
 - **requirements.txt**: Lists the required Python dependencies for the project.
 
 ## Setup Instructions
-
-1. Clone the repository to your local machine.
-2. Navigate to the project directory.
-3. Install the required dependencies using:
+1. You will need to install [Octo](https://github.com/montrealrobotics/octo/tree/libero_eval) and [LIBERO](https://github.com/montrealrobotics/LIBERO/tree/relabel_project_eval) on these specific branches in the same environment as this project.
+2. Clone the repository to your local machine.
+3. Navigate to the project directory.
+4. Install the required dependencies using:
    ```
    pip install -r requirements.txt
    ```
-4. Modify the `configs/test_cases.json` file to define your test cases.
+5. Toggle the `visualize` flag in the config to switch between environment rollouts or visualizing results.
 
 ## Running the Evaluation
 
 To run the evaluation pipeline, execute the following command:
 ```
-python src/eval_libero.py --finetuned_path <path_to_checkpoints>
+python evaluation_pipeline/src/eval_libero.py finetuned_path=<path_to_checkpoints>
 ```
 Replace `<path_to_checkpoints>` with the path to your finetuned model checkpoints.
 
@@ -47,7 +50,3 @@ The test cases are defined in the `configs/test_cases.json` file. Each test case
 ## Results
 
 The evaluation results for each test case will be saved in the `results/` directory as JSON files. Each file will contain metrics such as success rate, execution time, and other relevant performance indicators.
-
-## License
-
-This project is licensed under the MIT License. See the LICENSE file for more details.
