@@ -9,12 +9,52 @@ import json
 from pathlib import Path
 import argparse
 
-from utils import part_from_file, get_task_instruction_libero, init_genai_client, SemanticBreakdownGenerator
+from utils import part_from_file, get_task_instruction_bridge, init_genai_client
 
 
 model_name = "gemini-2.5-pro-exp-03-25"
 # model_name = "gemini-2.0-flash"
 client = init_genai_client()
+
+example_files = [
+    # part_from_file(client, file_name="./examples/close_cabinet.png"),
+    # part_from_file(client, file_name="./examples/open_cabinet.png"),
+    # part_from_file(client, file_name="./examples/open_cabinet_and_place_bowl.png"),
+]
+example_user_message = [
+    types.Part.from_text(
+        text="""You are a robot arm with a simple gripper. You are given the task \"Pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate.\" Given the task and the image showing the layout of the scene, create a plan of the possible sub-task motions you will need to perform to complete the task."""
+    ),
+    types.Part.from_text(
+        text="""You are a robot arm with a simple gripper. You are given the task \"Open the top drawer of the cabinet.\" Given the task and the image showing the layout of the scene, create a plan of the possible sub-task motions you will need to perform to complete the task.
+"""
+    ),
+    types.Part.from_text(
+        text="""You are a robot arm with a simple gripper. You are given the task \"Close the bottom drawer of the cabinet.\" Given the task and the image showing the layout of the scene, create a plan of the possible sub-task motions you will need to perform to complete the task."""
+    ),
+]
+example_model_message = [
+    types.Part.from_text(
+        text="""Okay, here is a plan outlining the sub-task motions to pick up the black bowl from the top drawer and place it on the plate:
+
+1.  **Grasp Bowl:** Approach the black bowl located inside the top drawer. Position the gripper around the rim of the bowl and close the gripper to securely grasp it.
+2.  **Lift Bowl:** Move the gripper vertically upwards, lifting the bowl clear of the top drawer.
+3.  **Move Bowl to Plate:** Move the gripper horizontally, carrying the bowl over the table surface until it is positioned directly above the plate on the left.
+4.  **Place Bowl on Plate:** Move the gripper vertically downwards to gently place the bowl onto the surface of the plate. Open the gripper to release the bowl."""
+    ),
+    types.Part.from_text(
+        text="""Okay, here is a plan outlining the sub-task motions to open the top drawer of the cabinet:
+
+1.  **Grasp Handle:** Close the gripper firmly around the top drawer handle.
+2.  **Pull Drawer Open:** Move the gripper horizontally outwards, straight away from the cabinet face, pulling the drawer open. Maintain a firm grip while pulling."""
+    ),
+    types.Part.from_text(
+        text="""Okay, here is a plan outlining the sub-task motions to close the bottom drawer of the cabinet:
+
+1.  **Grasp Handle:** Move the gripper to the handle of the *bottom* drawer. Position the gripper around the handle and close it firmly.
+2.  **Push Drawer Closed:** Move the gripper horizontally inwards, towards the cabinet face, pushing the drawer until it is fully closed. Maintain a firm grip while pushing."""
+    ),
+]
 
 
 def get_first_frame(video_path):
@@ -28,24 +68,38 @@ def get_first_frame(video_path):
         raise ValueError(f"Failed to read video file {video_path}.")
 
 
-def create_prompt(task_instruction, frame):
+def create_prompt(task_instruction, frame, zero_shot=False):
     base_prompt = f"""You are a robot arm with a simple gripper. You are given the task "{task_instruction}" Using the task and the image showing the layout of the scene, create a plan of the possible sub-task motions you will need to perform to complete the task."""
 
-    query_prompt = (
-        base_prompt
-        + f"""\n\nFollow these guidelines:
+    if zero_shot:
+        query_prompt = (
+            base_prompt
+            + f"""\n\nFollow these guidelines:
 1. Start off by pointing to no more than 8 items in the image."""
-        + """ The answer should follow the json format: [{"point": <point>, "label": <label1>}, ...]."""
-        + f""" The points are in [y, x] format normalized to 0-1000. One element a line.
+            + """ The answer should follow the json format: [{"point": <point>, "label": <label1>}, ...]."""
+            + f""" The points are in [y, x] format normalized to 0-1000. One element a line.
 2. Think step by step and list the locations and relations of all objects, noting any object that might interfere with the task.
 3. Finally, output the sub-tasks that will need to be completed to "{task_instruction}" in this scene. Try to be concise."""
-        + """ Output in the json format:  [{"sub_task": <sub-task>, "description": <description>}, ...]
+            + """ Output in the json format:  [{"sub_task": <sub-task>, "description": <description>}, ...]
 
 Example sub-tasks: "Grasp the bowl to the right of the white mug", "Move the mug towards the red plate", "Rotate the knob", "Pull the top drawer open", "Push the bottom drawer closed", "Place the can on top of the cabinet", "Lift the middle bowl"
-    """
-    )
+        """
+        )
 
-    return [types.Content(role="user", parts=[frame, types.Part(text=query_prompt)])]
+        return [types.Content(role="user", parts=[frame, types.Part(text=query_prompt)])]
+
+    query_prompt = base_prompt + "\n\nLook at the previous examples for the preferred format."
+
+    contents = [
+        types.Content(role="user", parts=[example_files[0], example_user_message[0]]),
+        types.Content(role="model", parts=[example_model_message[0]]),
+        types.Content(role="user", parts=[example_files[1], example_user_message[1]]),
+        types.Content(role="model", parts=[example_model_message[1]]),
+        types.Content(role="user", parts=[example_files[2], example_user_message[2]]),
+        types.Content(role="model", parts=[example_model_message[2]]),
+        types.Content(role="user", parts=[frame, types.Part.from_text(text=query_prompt)]),
+    ]
+    return contents
 
 
 def extract_subtask_labels(frame_part, task_instruction):
@@ -84,31 +138,24 @@ def main(args):
         with open(metadata_path) as f:
             metadata = json.load(f)
 
-    seen_instructions = set()
     video_tasks = []
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
-        traj_filename = mp4_file.stem.split("_demo")[0] + "_demo"
+        traj_filename = mp4_file.stem
 
         if metadata:
             file_metadata = metadata.get(mp4_file.name)
-            scene = file_metadata["scene"]
             task_instruction = file_metadata["task"]
         else:
-            scene, task_instruction, _ = get_task_instruction_libero(mp4_file)
-        grounded_instruction = scene + "_" + task_instruction
-        if grounded_instruction in seen_instructions:
-            print(f"Skipping duplicate task instruction: {task_instruction} in scene {scene}")
-            continue
-        seen_instructions.add(grounded_instruction)
+            task_instruction, _ = get_task_instruction_bridge(mp4_file)
 
         if traj_filename in labels_json_dict:
             print(f"Skipping already processed file: {mp4_file.name}")
             continue
 
-        video_tasks.append((mp4_file, traj_filename, scene, task_instruction))
+        video_tasks.append((mp4_file, traj_filename, task_instruction))
 
     zero_shot = True
-    for mp4_file, traj_filename, scene, task_instruction in video_tasks:
+    for mp4_file, traj_filename, task_instruction in video_tasks:
         print(f"Processing file: {mp4_file.name}")
         time.sleep(5)  # Avoid rate limiting
         first_frame = get_first_frame(mp4_file)

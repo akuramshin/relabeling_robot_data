@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import argparse
 
-from utils import part_from_file, upload_file, get_task_instruction_libero, init_genai_client
+from utils import part_from_file, get_task_instruction_bridge, init_genai_client, MotionBreakdownGenerator
 
 model_name = "gemini-2.5-pro-exp-03-25"
 # model_name = "gemini-2.0-flash-001"
@@ -75,12 +75,12 @@ example_model_message = [
 
 def create_prompt(task_instruction, video, subtask_labels, zero_shot=False):
     query_prompt = (
-        f"""The video is showing a robot arm performing the task "{task_instruction}" The task can be broken down into these possible sub-task motions:
+            f"""The video is showing a robot arm performing the task "{task_instruction}" The task can be broken down into these possible sub-task motions:
 
 {subtask_labels}
 
 """
-        + """You need to carefully look at the video and describe the sub-task motions you see being performed by the robot and the corresponding timecodes. Follow these guidelines:
+            + """You need to carefully look at the video and describe the sub-task motions you see being performed by the robot and the corresponding timecodes. Follow these guidelines:
 1. Start off by pointing to no more than 8 items in the image . The answer should follow the json format: [{"point": <point>, "label": <label1>}, ...]. The points are in [y, x] format normalized to 0-1000. One element a line.
 2. Determine the object movement and the resulting object relations. Explain the object movements.
 3. Combine motions for approaching and grasping objects. Also combine motions for placing and releasing objects. 
@@ -148,39 +148,24 @@ def main(args):
     video_tasks = []
     seen_instructions = {}
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
-        scene_task_id = mp4_file.stem.split("_demo")[0] + "_demo"
+        traj_id = mp4_file.stem
         if metadata:
             file_metadata = metadata.get(mp4_file.name)
             task_instruction = file_metadata["task"]
-            scene = file_metadata["scene"]
             demo_id = file_metadata["demo_id"]
         else:
-            scene, task_instruction, demo_id = get_task_instruction_libero(mp4_file)
-        if demo_id == -1:
-            print(f"Warning: No demo ID found for {mp4_file.name}, skipping")
-            continue
-        if "STUDY" in scene:
-            print(f"Skipping STUDY scene {scene}")
-            continue
+            task_instruction, demo_id = get_task_instruction_bridge(mp4_file)
 
-        traj_id = scene_task_id + f"_{demo_id}"
-        grounded_instruction = scene + "_" + task_instruction
 
         if traj_id in labels_json_dict:
-            seen_instructions[grounded_instruction] = seen_instructions.get(grounded_instruction, 0) + 1
             print(f"Skipping already processed file: {mp4_file.name}")
             continue
 
-        if scene_task_id not in subtask_labels_dict:
-            print(f"Warning: No subtask labels found for {scene_task_id}, skipping")
+        if traj_id not in subtask_labels_dict:
+            print(f"Warning: No subtask labels found for {traj_id}, skipping")
             continue
 
-        if seen_instructions.get(grounded_instruction, 0) > 4:
-            print(f"Warning: Too many instructions for {grounded_instruction}, skipping")
-            continue
-
-        seen_instructions[grounded_instruction] = seen_instructions.get(grounded_instruction, 0) + 1
-        subtask_labels = subtask_labels_dict.get(scene_task_id).get("subtask_labels")
+        subtask_labels = subtask_labels_dict.get(traj_id).get("subtask_labels")
 
         video_tasks.append(
             {
@@ -226,9 +211,9 @@ def main(args):
             motions_list = []
 
         for motion in motions_list:
-            if isinstance(motion["time_range"], list):
-                start, end = motion["time_range"]
-                motion["time_range"] = f"{int_to_mmss(start)} - {int_to_mmss(end)}"
+            if isinstance(motion['time_range'], list):
+                start, end = motion['time_range']
+                motion['time_range'] = f"{int_to_mmss(start)} - {int_to_mmss(end)}"
 
         labels_json_dict[traj_id] = {
             "demo_id": demo_id,
