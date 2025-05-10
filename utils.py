@@ -14,6 +14,12 @@ def init_genai_client():
     return genai.Client(api_key=GEMINI_API_KEY)
 
 
+def int_to_mmss(seconds):
+    minutes = seconds // 100
+    secs = seconds % 100
+    return f"{minutes:02}:{secs:02}"
+
+
 def upload_file(client, file_name):
     file = client.files.upload(file=file_name)
 

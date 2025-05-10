@@ -1,8 +1,6 @@
 from google.genai import types
 from google.genai.errors import ServerError, ClientError
 
-from datasets import Dataset
-
 import os
 import re
 import time
@@ -10,7 +8,7 @@ import json
 from pathlib import Path
 import argparse
 
-from utils import part_from_file, get_task_instruction_bridge, init_genai_client, MotionBreakdownGenerator
+from utils import part_from_file, get_task_instruction_bridge, init_genai_client, int_to_mmss
 
 model_name = "gemini-2.5-pro-exp-03-25"
 # model_name = "gemini-2.0-flash-001"
@@ -75,12 +73,12 @@ example_model_message = [
 
 def create_prompt(task_instruction, video, subtask_labels, zero_shot=False):
     query_prompt = (
-            f"""The video is showing a robot arm performing the task "{task_instruction}" The task can be broken down into these possible sub-task motions:
+        f"""The video is showing a robot arm performing the task "{task_instruction}" The task can be broken down into these possible sub-task motions:
 
 {subtask_labels}
 
 """
-            + """You need to carefully look at the video and describe the sub-task motions you see being performed by the robot and the corresponding timecodes. Follow these guidelines:
+        + """You need to carefully look at the video and describe the sub-task motions you see being performed by the robot and the corresponding timecodes. Follow these guidelines:
 1. Start off by pointing to no more than 8 items in the image . The answer should follow the json format: [{"point": <point>, "label": <label1>}, ...]. The points are in [y, x] format normalized to 0-1000. One element a line.
 2. Determine the object movement and the resulting object relations. Explain the object movements.
 3. Combine motions for approaching and grasping objects. Also combine motions for placing and releasing objects. 
@@ -114,12 +112,6 @@ def extract_subtask_labels(video_part, task_instruction, subtask_labels):
     return response
 
 
-def int_to_mmss(seconds):
-    minutes = seconds // 100
-    secs = seconds % 100
-    return f"{minutes:02}:{secs:02}"
-
-
 def main(args):
     print(f"VLM Processing {args.input_dir} dataset!")
 
@@ -146,7 +138,6 @@ def main(args):
         subtask_labels_dict = json.load(f)
 
     video_tasks = []
-    seen_instructions = {}
     for mp4_file in Path(args.input_dir).glob("*.mp4"):
         traj_id = mp4_file.stem
         if metadata:
@@ -155,7 +146,6 @@ def main(args):
             demo_id = file_metadata["demo_id"]
         else:
             task_instruction, demo_id = get_task_instruction_bridge(mp4_file)
-
 
         if traj_id in labels_json_dict:
             print(f"Skipping already processed file: {mp4_file.name}")
@@ -211,9 +201,12 @@ def main(args):
             motions_list = []
 
         for motion in motions_list:
-            if isinstance(motion['time_range'], list):
-                start, end = motion['time_range']
-                motion['time_range'] = f"{int_to_mmss(start)} - {int_to_mmss(end)}"
+            if isinstance(motion["time_range"], list):
+                start, end = motion["time_range"]
+                if isinstance(start, str) and ":" in start:
+                    motion["time_range"] = start + " - " + end
+                else:
+                    motion["time_range"] = f"{int_to_mmss(int(start))} - {int_to_mmss(int(end))}"
 
         labels_json_dict[traj_id] = {
             "demo_id": demo_id,

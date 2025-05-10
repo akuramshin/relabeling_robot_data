@@ -1,8 +1,6 @@
 from google.genai import types
 from google.genai.errors import ServerError, ClientError
 
-from datasets import Dataset
-
 import os
 import re
 import time
@@ -10,9 +8,10 @@ import json
 from pathlib import Path
 import argparse
 
-from utils import part_from_file, upload_file, get_task_instruction_libero, init_genai_client
+from utils import part_from_file, int_to_mmss, get_task_instruction_libero, init_genai_client
 
 model_name = "gemini-2.5-pro-exp-03-25"
+# model_name = "gemini-2.5-pro-preview-05-06"
 # model_name = "gemini-2.0-flash-001"
 client = init_genai_client()
 
@@ -114,12 +113,6 @@ def extract_subtask_labels(video_part, task_instruction, subtask_labels):
     return response
 
 
-def int_to_mmss(seconds):
-    minutes = seconds // 100
-    secs = seconds % 100
-    return f"{minutes:02}:{secs:02}"
-
-
 def main(args):
     print(f"VLM Processing {args.input_dir} dataset!")
 
@@ -159,9 +152,6 @@ def main(args):
         if demo_id == -1:
             print(f"Warning: No demo ID found for {mp4_file.name}, skipping")
             continue
-        if "STUDY" in scene:
-            print(f"Skipping STUDY scene {scene}")
-            continue
 
         traj_id = scene_task_id + f"_{demo_id}"
         grounded_instruction = scene + "_" + task_instruction
@@ -175,7 +165,7 @@ def main(args):
             print(f"Warning: No subtask labels found for {scene_task_id}, skipping")
             continue
 
-        if seen_instructions.get(grounded_instruction, 0) > 4:
+        if seen_instructions.get(grounded_instruction, 0) > 19:
             print(f"Warning: Too many instructions for {grounded_instruction}, skipping")
             continue
 
@@ -228,7 +218,10 @@ def main(args):
         for motion in motions_list:
             if isinstance(motion["time_range"], list):
                 start, end = motion["time_range"]
-                motion["time_range"] = f"{int_to_mmss(start)} - {int_to_mmss(end)}"
+                if isinstance(start, str) and ":" in start:
+                    motion["time_range"] = start + " - " + end
+                else:
+                    motion["time_range"] = f"{int_to_mmss(int(start))} - {int_to_mmss(int(end))}"
 
         labels_json_dict[traj_id] = {
             "demo_id": demo_id,
