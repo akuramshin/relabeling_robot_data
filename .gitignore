@@ -175,3 +175,4 @@ cython_debug/
 
 .vscode
 evaluation_pipeline/results
+*/outputs

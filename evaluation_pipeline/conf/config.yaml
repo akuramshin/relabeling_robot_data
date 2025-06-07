@@ -1,6 +1,5 @@
 finetuned_path: ??? # Path to finetuned Octo checkpoint directory. Required.
 output_dir: "evaluation_pipeline/results" # Directory to save the results
-# output_dir: "results"
 num_rollouts: 15 # Number of rollouts per task and checkpoint
 
 # Libero environment parameters
@@ -29,13 +28,13 @@ libero:
     max_episode_len: 300
 
 # Test cases configuration file
-# test_cases_config_1: "conf/test_cases_1.json"
-# test_cases_config_2: "conf/test_cases_2.json"
-test_cases_config_1: "test_cases_1.json"
-test_cases_config_2: "test_cases_2.json"
-test_cases_config_3: "test_cases_3.json"
+test_cases_config_1: "evaluation_pipeline/conf/test_cases_1.json"
+test_cases_config_2: "evaluation_pipeline/conf/test_cases_2.json"
+# test_cases_config_1_baseline: "test_cases_1_baseline.json"
+# test_cases_config_2_baseline: "test_cases_2_baseline.json"
+test_cases_config_3: "evaluation_pipeline/conf/test_cases_3.json"
 
 # Checkpoints to evaluate
 checkpoints: ["subtasks", "original", "baseline"]
 
-visualize: true
+use_new_format: true
